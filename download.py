@@ -20,7 +20,7 @@ def download_video_yt_dlp(url, output_path="download/download.mp4"):
         if os.path.exists(output_path):
             print(f"กำลังลบไฟล์เก่า: {output_path}")
             os.remove(output_path)
-            print("ลบไฟล์เก่าแล้วนะ.")
+            print("ลบไฟล์เก่าแล้ว.")
 
         command = [
             'yt-dlp',
