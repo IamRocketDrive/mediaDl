@@ -1,0 +1,9 @@
+Flask
+requests
+numpy
+Pillow
+deep-translator
+instaloader
+opencv-python
+yt-dlp
+gallery-dl

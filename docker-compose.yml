@@ -1,0 +1,47 @@
+version: "3.9"
+
+services:
+  n8n:
+    image: n8nio/n8n  # ใช้ image ของ n8n (ตรวจสอบ version ที่ต้องการ)
+    restart: always
+    ports:
+      - "5678:5678"  # Map port 5678 บน host ไปยัง 5678 ใน container
+    environment:
+    environment:
+      - DB_TYPE=postgresdb
+      - DB_POSTGRESDB_DATABASE=postgres
+      - DB_POSTGRESDB_HOST=aws-0-ap-southeast-1.pooler.supabase.com
+      - DB_POSTGRESDB_PORT=5432
+      - DB_POSTGRESDB_USER=postgres.raheqinbrglxzdcrpgrs
+      - DB_POSTGRESDB_PASSWORD=?Everfree99
+      - DB_POSTGRESDB_SCHEMA=public
+      - N8N_BASIC_AUTH_ACTIVE=true
+      - N8N_BASIC_AUTH_USER=admin
+      - N8N_BASIC_AUTH_PASSWORD=supersecret
+      - N8N_HOST=n8n.local
+      - N8N_PORT=5678
+      - N8N_PROTOCOL=http
+      - GENERIC_TIMEZONE=Asia/Bangkok
+    volumes:
+      - n8n_data:/home/node/.n8n
+      - N8N_BINARY_DATA_FOLDER=/home/node/files
+      - N8N_SECURE_COOKIE=false  # เพิ่มบรรทัดนี้
+
+  flask-app:
+    build:
+      context: .  # Directory ที่มี Dockerfile, app.py, download.py, ฯลฯ (สมมติว่าอยู่ root)
+      dockerfile: Dockerfile
+    ports:
+      - "5001:5001"  # Map port 5000 บน host ไปยัง 5000 ใน container
+    volumes:
+      - ./downloaded:/app/downloaded  # Mount โฟลเดอร์ downloaded เพื่อให้เข้าถึงได้จากภายนอก
+    environment:
+      - FLASK_APP=app.py
+      - FLASK_RUN_HOST=0.0.0.0
+    depends_on:
+      - n8n  # (Optional) ถ้า Flask app ต้องพึ่งพา n8n
+
+volumes:
+  n8n_data:  # กำหนด volume ที่ใช้สำหรับ n8n
+    #  driver: local
+  # db_data:  # ถ้ามี database
