@@ -1,67 +1,61 @@
+import json
 from flask import Flask, request, jsonify
 import instaloader
 import re
 import os
 import subprocess
 import shutil
-from video_captioner import add_caption_to_video
-from postToFacebook import upload_reel_from_file, check_reel_status, create_unpublished_photo_from_file, publish_album  # นำเข้าฟังก์ชันที่จำเป็น
+import time
+from videoCaptioner import add_caption_to_video
+from postToFacebook import auto_post_from_folder
+from post_comment import post_comment_with_image,post_comment
+from videoUpscale import upscale_video
+from getFacebookPhoto import download_facebook_images
+
 
 app = Flask(__name__)
 L = instaloader.Instaloader(dirname_pattern="downloaded")
+L.login("AlphonseMcClouds", "#Everfree99")  # ใส่ username และ password จริง
 
 FFMPEG_PATH = "C:/ffmpeg/bin/ffmpeg.exe"
 
-
 def download_video_yt_dlp(url, output_path="download/download.mp4"):
-    """ดาวน์โหลดวิดีโอด้วย yt-dlp พร้อมรวมเสียง/วิดีโอด้วย FFmpeg"""
+    """ดาวน์โหลดวิดีโอด้วย yt-dlp พร้อมดึง title และรวมเสียง/วิดีโอด้วย FFmpeg"""
     try:
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
         if os.path.exists(output_path):
             print(f"กำลังลบไฟล์เก่า: {output_path}")
             os.remove(output_path)
-            print("ลบไฟล์เก่าแล้วนะ.")
 
+        # Step 1: ดึง title ก่อน
+        get_title_cmd = ['yt-dlp', '--get-title', url]
+        title_result = subprocess.run(get_title_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        title = title_result.stdout.strip() if title_result.returncode == 0 else None
+
+        # Step 2: ดาวน์โหลดวิดีโอ
         command = [
             'yt-dlp',
-            '-f',
-            'bestvideo+bestaudio/best',
+            '-f', 'bv*+ba[ext=m4a]/b[ext=mp4]',
             url,
-            '-o',
-            output_path,
-            '--merge-output-format',
-            'mp4',
-            '--ffmpeg-location',
-            FFMPEG_PATH,
-            '--remux-video',
-            'mp4'
+            '-o', output_path,
+            '--merge-output-format', 'mp4',
+            '--ffmpeg-location', FFMPEG_PATH,
+            '--remux-video', 'mp4'
         ]
 
-        print(f"กำลังดาวน์โหลดวิดีโอด้วย yt-dlp จาก: {url}")
+        print(f"ดาวน์โหลดจาก: {url}")
         print(f"บันทึกเป็น: {output_path}")
-        print(f"ใช้ FFmpeg ที่: {FFMPEG_PATH}")
-
-        process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        stdout, stderr = process.communicate()
+        process = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
 
         if process.returncode == 0:
-            print("ดาวน์โหลดและรวมไฟล์เสียง/วิดีโอสำเร็จ!")
-            return output_path, None
+            print("✅ ดาวน์โหลดสำเร็จ")
+            return output_path, None, title
         else:
-            error_message = stderr.decode('utf-8')
-            print("เกิดข้อผิดพลาดในการดาวน์โหลดวิดีโอด้วย yt-dlp:")
-            print(error_message)
-            return None, f"เกิดข้อผิดพลาดในการดาวน์โหลดวิดีโอ: {error_message}"
+            print("❌ ดาวน์โหลดล้มเหลว")
+            return None, process.stderr, title
 
-    except FileNotFoundError as e:
-        error_message = f"Error: ไม่พบคำสั่ง yt-dlp หรือ FFmpeg โปรดตรวจสอบการติดตั้ง: {e}"
-        print(error_message)
-        return None, error_message
     except Exception as e:
-        error_message = f"เกิดข้อผิดพลาดที่ไม่คาดคิด: {e}"
-        print(error_message)
-        return None, error_message
-
+        return None, str(e), None
 
 def download_image_or_album(url, output_dir="downloaded"):
     """ดาวน์โหลดรูปภาพหรืออัลบั้มด้วย gallery-dl โดยไม่สร้างโฟลเดอร์ย่อย"""
@@ -100,101 +94,41 @@ def download_image_or_album(url, output_dir="downloaded"):
 def download_instagram_item(url, output_dir="downloaded"):
     """ดาวน์โหลดโพสต์ Instagram (รูปภาพหรือวิดีโอ)"""
     shortcode = extract_instagram_shortcode(url)
-    print("กำลังดาวน์โหลดวิดีโอด้วย shortcode:", shortcode)
+    print("กำลังดาวน์โหลดด้วย shortcode:", shortcode)
     try:
         post = instaloader.Post.from_shortcode(L.context, shortcode)
         print("ดึงโพสต์สำเร็จ, เริ่มดาวน์โหลด")
         L.download_post(post, target=shortcode)
-        for f in os.listdir("downloaded"):
-            if f.endswith(".mp4"):
+
+        video_path = None  # เก็บ path ของวิดีโอ (ถ้ามี)
+        image_path = None  # เก็บ path ของรูปภาพ (ถ้ามี)
+
+        for f in os.listdir(output_dir):
+            lower_f = f.lower()
+            if lower_f.endswith(".mp4"):
                 print("พบไฟล์วิดีโอ:", f)
-                video_path = os.path.join("downloaded", f)
-                # ตรวจสอบและ upscale วิดีโอ
-                # return upscale_video(video_path)
-                return video_path, None
+                video_path = os.path.join(output_dir, f)
+                break  # เจอวิดีโอแล้วออกเลย (ยึดวิดีโอเป็นหลัก)
+            elif lower_f.endswith((".jpg", ".jpeg", ".png")):
+                print("พบไฟล์รูปภาพ:", f)
+                image_path = os.path.join(output_dir, f)
+
+        if video_path:
+            return video_path, post.caption  # คืนค่าวิดีโอและแคปชั่น (ถ้ามี)
+        elif image_path:
+            return image_path, post.caption  # คืนค่ารูปภาพและแคปชั่น (ถ้าไม่มีวิดีโอ)
+        else:
+            return None, "ไม่พบไฟล์ที่ดาวน์โหลดจาก Instagram"
+
     except Exception as e:
         print("เกิดข้อผิดพลาดในการดาวน์โหลด:", e)
-    return None
-    
-def download_video(shortcode):
-    print("กำลังดาวน์โหลดวิดีโอด้วย shortcode:", shortcode)
-    try:
-        post = instaloader.Post.from_shortcode(L.context, shortcode)
-        print("ดึงโพสต์สำเร็จ, เริ่มดาวน์โหลด")
-        L.download_post(post, target=shortcode)
-        for f in os.listdir("downloaded"):
-            if f.endswith(".mp4"):
-                print("พบไฟล์วิดีโอ:", f)
-                video_path = os.path.join("downloaded", f)
-                # ตรวจสอบและ upscale วิดีโอ
-                return upscale_video(video_path)
-    except Exception as e:
-        print("เกิดข้อผิดพลาดในการดาวน์โหลด:", e)
-    return None
-
-def upscale_video(video_path, target_width=540, target_height=960):
-    print(f"กำลังตรวจสอบและ upscale วิดีโอ: {video_path}")
-    cap = cv2.VideoCapture(video_path)
-    if not cap.isOpened():
-        print("ไม่สามารถเปิดวิดีโอได้")
-        return video_path
-
-    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    print(f"ขนาดวิดีโอดั้งเดิม: {width}x{height}")
-
-    if width >= target_width and height >= target_height:
-        print("ขนาดวิดีโอเพียงพอ ไม่ต้อง upscale")
-        cap.release()
-        return video_path
-
-    # คำนวณอัตราส่วนเพื่อรักษา aspect ratio
-    aspect_ratio = width / height
-    target_aspect = target_width / target_height
-
-    if aspect_ratio > target_aspect:
-        # วิดีโอกว้างเกินไป ปรับตามความสูง
-        new_height = target_height
-        new_width = int(new_height * aspect_ratio)
-    else:
-        # วิดีโอสูงเกินไป ปรับตามความกว้าง
-        new_width = target_width
-        new_height = int(new_width / aspect_ratio)
-
-    # ปรับขนาดให้เป็นจำนวนคู่ (จำเป็นสำหรับบาง codec)
-    new_width = new_width + (new_width % 2)
-    new_height = new_height + (new_height % 2)
-
-    output_path = os.path.join(os.path.dirname(video_path), "upscaled_video.mp4")
-    fourcc = cv2.VideoWriter_fourcc(*'XVID')
-    fps = cap.get(cv2.CAP_PROP_FPS)
-    out = cv2.VideoWriter(output_path, fourcc, fps, (new_width, new_height))
-
-    print(f"กำลัง upscale เป็นขนาด: {new_width}x{new_height}")
-    while True:
-        ret, frame = cap.read()
-        if not ret:
-            break
-        # Upscale เฟรม
-        upscaled_frame = cv2.resize(frame, (new_width, new_height), interpolation=cv2.INTER_CUBIC)
-        out.write(upscaled_frame)
-
-    cap.release()
-    out.release()
-    print(f"upscale เสร็จสิ้น บันทึกที่: {output_path}")
-    return output_path
+        return None, f"เกิดข้อผิดพลาดในการดาวน์โหลดวิดีโอ Instagram: {e}"
 
 def extract_instagram_shortcode(url):
     """แยก shortcode จาก URL Instagram"""
     clean_url = url.split('?')[0]
     match = re.search(r'/(?:reel|p|tv)/([A-Za-z0-9_-]{5,})', clean_url)
     return match.group(1) if match else None
-
-
-def is_facebook_image_post(url):
-    """ตรวจสอบว่าเป็นโพสต์รูปภาพบน Facebook (อย่างง่าย)"""
-    return "/photo" in url or "/posts/" in url
-
 
 def is_instagram_url(url):
     """ตรวจสอบว่าเป็น URL Instagram"""
@@ -219,7 +153,7 @@ def clear_download_folder(folder_path):
     except Exception as e:
         print(f"เกิดข้อผิดพลาดในการล้างโฟลเดอร์ {folder_path}: {e}")
 
-@app.route('/download', methods=['POST'])
+@app.route('/fetch', methods=['POST'])
 def download_content():
     clear_download_folder("downloaded")
     data = request.get_json()
@@ -240,189 +174,143 @@ def download_content():
     media_ids = []  # เก็บ ID ของ media ที่อัปโหลด (ใช้กับอัลบั้ม)
 
     try:
+        result = None  # <-- เตรียมตัวแปรไว้ก่อน
+        instagram_caption = None
+        youtube_title = None  # เตรียมตัวแปรสำหรับเก็บ title จาก YouTube
+
         if is_instagram_url(target_url):
             print("ตรวจพบ URL Instagram...")
             filepath, error = download_instagram_item(target_url, download_folder)
             print(f"ไฟล์ที่ดาวน์โหลดจาก Instagram: {filepath}")
-            if filepath and filepath.endswith('.mp4'):
+            if filepath and filepath.lower().endswith(('.mp4')):
+                # เรียก upscale_video หากเป็นวิดีโอ
+                upscaled_video_path = upscale_video(filepath)
+                if upscaled_video_path:
+                    print(f"วิดีโอถูก upscale แล้ว: {upscaled_video_path}")
+                    # แทนที่ filepath ด้วย path ของวิดีโอที่ถูก upscale
+                    filepath = upscaled_video_path
+                # เรียก add_caption_to_video หลังจาก upscale
                 if video_caption_text:
-                    print(f"กำลังเพิ่มแคปชันลงในวิดีโอ Instagram: {video_caption_text}")
-                    captioned_video_path = os.path.join(
-                        download_folder, "captioned_instagram_video.mp4")
-                    final_filepath = add_caption_to_video(
-                        filepath, video_caption_text, captioned_video_path)
-                    if final_filepath:
-                        filepath = final_filepath
-                        print(f"วิดีโอที่ใส่แคปชันแล้ว: {filepath}")
-                        upload_response = upload_reel_from_file(
-                            filepath, description, page_id, access_token)
-                        print("ผลลัพธ์การอัปโหลดไป Facebook:", upload_response)
-                        if upload_response and upload_response.get("id"):
-                            success = True
-                            reel_id = upload_response.get("id")
-                        else:
-                            error = f"อัปโหลดไป Facebook ล้มเหลว: {upload_response.get('error') if upload_response else 'ไม่มีการตอบกลับจากการอัปโหลด'}"
+                    captioned_video_path = add_caption_to_video(filepath, video_caption_text)
+                    if captioned_video_path:
+                        print(f"วิดีโอถูกใส่แคปชันแล้ว: {captioned_video_path}")
+                        # แทนที่ filepath ด้วย path ของวิดีโอที่ใส่แคปชัน
+                        filepath = captioned_video_path
                     else:
-                        error = "ไม่สามารถเพิ่มแคปชันลงในวิดีโอ Instagram ได้"
-                else:
-                    upload_response = upload_reel_from_file(
-                        filepath, description, page_id, access_token)
-                    print("ผลลัพธ์การอัปโหลดไป Facebook:", upload_response)
-                    if upload_response and upload_response.get("id"):
-                        success = True
-                        reel_id = upload_response.get("id")
-                    else:
-                        error = f"อัปโหลดไป Facebook ล้มเหลว: {upload_response.get('error') if upload_response else 'ไม่มีการตอบกลับจากการอัปโหลด'}"
-            elif filepath:  # กรณีเป็นรูปภาพจาก Instagram
-                media_id = create_unpublished_photo_from_file(
-                    filepath, page_id, access_token)
-                if media_id:
-                    media_ids.append(media_id)
-                    publish_response = publish_album(
-                        media_ids, description, page_id, access_token)
-                    if publish_response and publish_response.get("id"):
-                        success = True
-                    else:
-                        error = f"เผยแพร่รูปภาพ Instagram ไป Facebook ล้มเหลว: {publish_response.get('error') if publish_response else 'ไม่มีการตอบกลับจากการเผยแพร่'}"
-                else:
-                    error = "ไม่สามารถสร้าง unpublished photo บน Facebook ได้"
+                        print("การใส่แคปชันวิดีโอไม่สำเร็จ จะโพสต์วิดีโอต้นฉบับแทน")
+            description = data.get("caption") or instagram_caption or ""
+            result = auto_post_from_folder(access_token, page_id, download_folder, description)
 
         elif "facebook.com" in target_url:
             print("ตรวจพบ URL Facebook...")
-            if is_facebook_image_post(target_url):
+
+            # Check for the specific Facebook share URL pattern
+            if "facebook.com/share/p/" in target_url:
+                print("URL matches Facebook share pattern. Calling getFacebookPhoto.download_facebook_images")
+                download_facebook_images(target_url, download_folder)  # เรียกใช้ฟังก์ชันใหม่
+                result = auto_post_from_folder(access_token, page_id, download_folder, description)
+
+            else:
+                video_path, error, youtube_title = download_video_yt_dlp(target_url,
+                                                        output_path=os.path.join(download_folder, "download.mp4"))  # รับ title กลับมาด้วย
+                if video_path:
+                    # เรียก upscale_video หากเป็นวิดีโอ
+                    upscaled_video_path = upscale_video(video_path)
+                    if upscaled_video_path:
+                        print(f"วิดีโอถูก upscale แล้ว: {upscaled_video_path}")
+                        # แทนที่ video_path ด้วย path ของวิดีโอที่ถูก upscale
+                        video_path = upscaled_video_path
+                    # เรียก add_caption_to_video หลังจาก upscale
+                    if video_caption_text:
+                        captioned_video_path = add_caption_to_video(video_path, video_caption_text)
+                        if captioned_video_path:
+                            print(f"วิดีโอถูกใส่แคปชันแล้ว: {captioned_video_path}")
+                            # แทนที่ video_path ด้วย path ของวิดีโอที่ใส่แคปชัน
+                            video_path = captioned_video_path
+                        else:
+                            print("การใส่แคปชันวิดีโอไม่สำเร็จ จะโพสต์วิดีโอต้นฉบับแทน")
+                    description = data.get("caption") or youtube_title or ""  # ใช้ title ถ้าไม่มี caption
+                    result = auto_post_from_folder(access_token, page_id, download_folder, description)
+                else:
+                    print("ดาวน์โหลดวิดีโอ Facebook ล้มเหลว, ลองโหลดเป็นรูปภาพแทน...")
+                    output_dir, error = download_image_or_album(target_url, download_folder)
+                    if output_dir:
+                        result = auto_post_from_folder(access_token, page_id, download_folder, description)
+                    else:
+                        print("ดาวน์โหลดรูปภาพ Facebook ล้มเหลว:", error)
+                        return jsonify({"success": False, "error": error}), 500
+
+        else:
+            print("ตรวจพบ URL อื่น...")
+
+            video_path, error, youtube_title = download_video_yt_dlp(target_url, output_path=os.path.join(download_folder, "download.mp4"))  # รับ title กลับมาด้วย
+            if video_path:
+                # เรียก upscale_video หากเป็นวิดีโอ
+                upscaled_video_path = upscale_video(video_path)
+                if upscaled_video_path:
+                    print(f"วิดีโอถูก upscale แล้ว: {upscaled_video_path}")
+                    # แทนที่ video_path ด้วย path ของวิดีโอที่ถูก upscale
+                    video_path = upscaled_video_path
+
+                # เรียก add_caption_to_video หลังจาก upscale
+                if video_caption_text:
+                    captioned_video_path = add_caption_to_video(video_path, video_caption_text)
+                    if captioned_video_path:
+                        print(f"วิดีโอถูกใส่แคปชันแล้ว: {captioned_video_path}")
+                        # แทนที่ video_path ด้วย path ของวิดีโอที่ใส่แคปชัน
+                        video_path = captioned_video_path
+                    else:
+                        print("การใส่แคปชันวิดีโอไม่สำเร็จ จะโพสต์วิดีโอต้นฉบับแทน")
+                
+                description = data.get("caption") or youtube_title or ""  # ใช้ title ถ้าไม่มี caption
+                # เรียก auto_post_from_folder หลังจากที่ add_caption_to_video เสร็จ (ถ้ามี)
+                result = auto_post_from_folder(access_token, page_id, download_folder, description)
+            else:
+                print("ดาวน์โหลดวิดีโอไม่สำเร็จ ลองโหลดเป็นรูปภาพแทน...")
                 output_dir, error = download_image_or_album(target_url, download_folder)
                 if output_dir:
-                    image_files = [os.path.join(output_dir, f) for f in os.listdir(output_dir) if f.endswith(('.jpg', '.jpeg', '.png', '.gif'))]
-                    if not image_files:
-                        error = "ไม่พบไฟล์รูปภาพในโฟลเดอร์ที่ดาวน์โหลด"
-                        print(error)
-                        return jsonify({"success": False, "error": error}), 500
-                    
-                    # ตรวจสอบว่า image_files เป็น list
-                    if not isinstance(image_files, list):
-                        error = f"image_files ไม่ใช่ list: {type(image_files)}"
-                        print(error)
-                        return jsonify({"success": False, "error": error}), 500
-                    
-                    publish_response = publish_album(image_files, description, page_id, access_token)
-                    if publish_response.get("success"):
-                        clear_download_folder(download_folder)
-                        return jsonify({
-                            "success": True,
-                            "message": "โพสต์รูปภาพ Facebook สำเร็จ",
-                            "post_id": publish_response.get("post_id")
-                        })
-                    else:
-                        error = f"เผยแพร่รูปภาพ Facebook ล้มเหลว: {publish_response.get('message')}"
-                        print(error, publish_response.get("details"), publish_response.get("errors"))
-                        return jsonify({
-                            "success": False,
-                            "error": error,
-                            "details": publish_response.get("details"),
-                            "upload_errors": publish_response.get("errors")
-                        }), 500
+                    result = auto_post_from_folder(access_token, page_id, download_folder, description)
                 else:
-                    print("ดาวน์โหลดรูปภาพ Facebook ล้มเหลว:", error)
+                    print("ดาวน์โหลดรูปภาพล้มเหลว:", error)
                     return jsonify({"success": False, "error": error}), 500
-            else:
-                output_video_filename = os.path.join(
-                    download_folder, "facebook_video.mp4")
-                filepath, error = download_video_yt_dlp(
-                    target_url, output_video_filename)
-                if filepath:
-                    if video_caption_text:
-                        print(
-                            f"กำลังเพิ่มแคปชันลงในวิดีโอ Facebook: {video_caption_text}")
-                        captioned_video_path = os.path.join(
-                            download_folder, "captioned_facebook_video.mp4")
-                        final_filepath = add_caption_to_video(
-                            filepath, video_caption_text, captioned_video_path)
-                        if final_filepath:
-                            filepath = final_filepath
-                            upload_response = upload_reel_from_file(
-                                filepath, description, page_id, access_token)
-                            if upload_response and upload_response.get("id"):
-                                success = True
-                                reel_id = upload_response.get("id")
-                            else:
-                                error = f"อัปโหลดวิดีโอ Facebook ไป Facebook ล้มเหลว: {upload_response.get('error') if upload_response else 'ไม่มีการตอบกลับจากการอัปโหลด'}"
-                        else:
-                            error = "ไม่สามารถเพิ่มแคปชันลงในวิดีโอ Facebook ได้"
-                    else:
-                        upload_response = upload_reel_from_file(
-                            filepath, description, page_id, access_token)
-                        if upload_response and upload_response.get("id"):
-                            success = True
-                            reel_id = upload_response.get("id")
-                        else:
-                            error = f"อัปโหลดวิดีโอ Facebook ไป Facebook ล้มเหลว: {upload_response.get('error') if upload_response else 'ไม่มีการตอบกลับจากการอัปโหลด'}"
 
-        elif target_url.lower().endswith(('.jpg', '.jpeg', '.png', '.gif')):
-            output_dir, error = download_image_or_album(
-                target_url, download_folder)
-            if output_dir:
-                image_files = [os.path.join(output_dir, f) for f in os.listdir(
-                    output_dir) if f.endswith(('.jpg', '.jpeg', '.png', '.gif'))]
-                for image_file in image_files:
-                    media_id = create_unpublished_photo_from_file(
-                        image_file, page_id, access_token)
-                    if media_id:
-                        media_ids.append(media_id)
-                if media_ids:
-                    publish_response = publish_album(
-                        media_ids, description, page_id, access_token)
-                    if publish_response and publish_response.get("id"):
-                        success = True
-                    else:
-                        error = f"เผยแพร่รูปภาพจาก URL โดยตรงไป Facebook ล้มเหลว: {publish_response.get('error') if publish_response else 'ไม่มีการตอบกลับจากการเผยแพร่'}"
+        print("Result from posting:", result)
+        if result and 'id' in result:
+            post_id = result['id']
+            i = 1
+            comment_responses = []
+            while True:
+                text = data.get(f"comment{i}")
+                if not text:
+                    print("ไม่มีคอมเมนต์เพิ่มเติม")
+                    break
+                image_url = data.get(f"comment{i}_image_url")
+                if image_url:
+                    print(f"พบ image_url สำหรับคอมเมนต์ {i}: {repr(image_url)}")
+                    try:
+                        res = post_comment_with_image(post_id, text, image_url, access_token)
+                        print(f"ผลลัพธ์ post_comment_with_image: {res}")
+                    except Exception as e:
+                        print(f"โพสต์คอมเมนต์ {i} พร้อมรูปภาพ ล้มเหลว: {e}")
+                        res = post_comment(post_id, text, access_token)
                 else:
-                    error = "ไม่พบรูปภาพที่ดาวน์โหลดจาก URL โดยตรง หรือไม่สามารถสร้าง unpublished photo ได้"
+                    print(f"โพสต์คอมเมนต์ {i} ปกติ:", text)
+                    res = post_comment(post_id, text, access_token)
 
-        else:
-            output_video_filename = os.path.join(
-                download_folder, "downloaded_video.mp4")
-            filepath, error = download_video_yt_dlp(
-                target_url, output_video_filename)
-            if filepath:
-                if video_caption_text:
-                    print(f"กำลังเพิ่มแคปชันลงในวิดีโอทั่วไป: {video_caption_text}")
-                    captioned_video_path = os.path.join(
-                        download_folder, "captioned_general_video.mp4")
-                    final_filepath = add_caption_to_video(
-                        filepath, video_caption_text, captioned_video_path)
-                    if final_filepath:
-                        filepath = final_filepath
-                        upload_response = upload_reel_from_file(
-                            filepath, description, page_id, access_token)
-                        if upload_response and upload_response.get("id"):
-                            success = True
-                            reel_id = upload_response.get("id")
-                        else:
-                            error = f"อัปโหลดวิดีโอจาก URL ทั่วไปไป Facebook ล้มเหลว: {upload_response.get('error') if upload_response else 'ไม่มีการตอบกลับจากการอัปโหลด'}"
-                    else:
-                        error = "ไม่สามารถเพิ่มแคปชันลงในวิดีโอทั่วไปได้"
-                else:
-                    upload_response = upload_reel_from_file(
-                        filepath, description, page_id, access_token)
-                    if upload_response and upload_response.get("id"):
-                        success = True
-                        reel_id = upload_response.get("id")
-                    else:
-                        error = f"อัปโหลดวิดีโอจาก URL ทั่วไปไป Facebook ล้มเหลว: {upload_response.get('error') if upload_response else 'ไม่มีการตอบกลับจากการอัปโหลด'}"
+                comment_responses.append(res)
+                print(f"ผลลัพธ์คอมเมนต์ {i}:", res)
+                i += 1
+                time.sleep(30)  # หน่วงเวลา 30 วินาที ก่อนโพสต์คอมเมนต์ถัดไป
 
-        if success:
-            if reel_id:
-                return jsonify({"success": True, "message": "ดาวน์โหลดและอัปโหลดไป Facebook สำเร็จ", "reel_id": reel_id})
-            elif media_ids:
-                return jsonify({"success": True, "message": "ดาวน์โหลดและโพสต์รูปภาพไป Facebook สำเร็จ"})
-            else:
-                return jsonify({"success": True, "message": "ดาวน์โหลดสำเร็จ"})
+            return jsonify({"success": True, "post_id": post_id, "comments": comment_responses})
+
+        elif result and 'error' in result:
+            return jsonify({"success": False, "error": result['error']}), 500
         else:
-            return jsonify({"success": False, "error": error or "เกิดข้อผิดพลาดที่ไม่ทราบสาเหตุ"}), 500
+            return jsonify({"success": False, "error": "ไม่สามารถโพสต์ได้"}), 500
 
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
-
 
 if __name__ == '__main__':
     os.makedirs("downloaded", exist_ok=True)

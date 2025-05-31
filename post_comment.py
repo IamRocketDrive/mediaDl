@@ -31,20 +31,20 @@ def post_comments_with_delay(post_id, comments, access_token, delay=10):
             time.sleep(delay)  # หน่วงเวลาก่อนโพสต์คอมเมนต์ถัดไป
 
         print("โพสต์คอมเมนต์ทั้งหมดเสร็จสิ้น")
-        return jsonify({
+        return {  # เปลี่ยน jsonify เป็น dict
             "success": True,
             "message": "โพสต์คอมเมนต์สำเร็จ",
             "comment_responses": comment_responses
-        })
+        }
 
     except Exception as e:
         error_msg = str(e)
         print(f"เกิดข้อผิดพลาดในการโพสต์คอมเมนต์: {error_msg}")
-        return jsonify({
+        return {  # เปลี่ยน jsonify เป็น dict
             "success": False,
             "message": "เกิดข้อผิดพลาดในการโพสต์คอมเมนต์",
             "error": error_msg
-        }), 500
+        }, 500
 
 def post_comment(post_id, comment, access_token):
     """โพสต์คอมเมนต์ข้อความธรรมดา"""

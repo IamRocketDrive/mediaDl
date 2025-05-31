@@ -4,7 +4,7 @@ import re
 import os
 import subprocess
 import shutil
-from video_captioner import add_caption_to_video
+from videoCaptioner import add_caption_to_video
 from postToFacebook import upload_reel_from_file, check_reel_status, create_unpublished_photo_from_file, publish_album  # นำเข้าฟังก์ชันที่จำเป็น
 
 app = Flask(__name__)

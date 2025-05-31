@@ -332,6 +332,9 @@ def fetch_instagram():
                                 print("ไม่มีคอมเมนต์เพิ่มเติมสำหรับ reel")
                                 break
                             comment_image_url = data.get(f"comment{i}_image_url")
+                            image_url = data.get(f"comment{i}_image_url")
+                            print(f"image_url ของ comment{i}: {image_url}")
+
                             print(f"ตรวจสอบข้อมูลคอมเมนต์ {i}:", comment, "รูปภาพ:", comment_image_url)
                             if comment_image_url:
                                 print(f"โพสต์คอมเมนต์ {i} พร้อมรูปภาพ")
