@@ -136,6 +136,9 @@ def add_caption_to_video(video_path, caption, output_path="downloaded/captioned_
 
 def is_file_too_large(file_path, max_size_mb=100):
     """ตรวจสอบว่าไฟล์มีขนาดเกินที่กำหนดหรือไม่ (MB)"""
+    if max_size_mb is None:
+        # ถ้าไม่ได้กำหนดขนาดสูงสุด ให้ถือว่าไฟล์ไม่ใหญ่เกินไปเสมอ
+        return False
     file_size_bytes = os.path.getsize(file_path)
     file_size_mb = file_size_bytes / (1024 * 1024)
     return file_size_mb > max_size_mb

@@ -146,7 +146,7 @@ def check_reel_status(video_id, access_token):
     logging.info(f"กำลังตรวจสอบสถานะ Reel: {video_id}")
     url = f"https://graph.facebook.com/v22.0/{video_id}"
     params = {"access_token": access_token, "fields": "status"}
-    for attempt in range(10):
+    for attempt in range(6): # Reduced attempts
         logging.info(f"พยายามตรวจสอบสถานะครั้งที่ {attempt + 1}")
         try:
             res = requests.get(url, params=params)
@@ -158,7 +158,7 @@ def check_reel_status(video_id, access_token):
                 return True
         except requests.exceptions.RequestException as e:
             logging.error(f"เกิดข้อผิดพลาดในการตรวจสอบสถานะ: {e}")
-        time.sleep(30)
+        time.sleep(10) # Reduced sleep time
         logging.info("รอ 30 วินาทีก่อนตรวจสอบครั้งถัดไป")
     logging.warning("หมดเวลาตรวจสอบสถานะ Reel")
     return False
