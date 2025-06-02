@@ -5,7 +5,7 @@ import os
 
 # กำหนดค่าของคุณที่นี่
 CLIENT_ID = '562174775855-4u3egrucds921bg6be050tfev1te9ngj.apps.googleusercontent.com'
-CLIENT_SECRET = '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'
+CLIENT_SECRET = 'test'
 VIDEO_FILE = 'downloaded/download.mp4'  # เปลี่ยนเป็นไฟล์วิดีโอของคุณ
 SCOPES = ['https://www.googleapis.com/auth/youtube.upload']
 
